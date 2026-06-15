@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, Settings, Plus, Minus,
-  ChevronDown, ChevronUp, Copy, Check, X
+  ChevronDown, ChevronUp, Copy, Check, X, Upload
 } from 'lucide-react';
 
 // ─── Apps Script Template ────────────────────────────────────
@@ -825,6 +825,25 @@ export default function App() {
     if (url) { sync(); const t = setInterval(sync, 30000); return () => clearInterval(t); }
   }, [sync]);
 
+  // 將本機所有資料（含備注）逐週推送到 Sheets
+  // 使用情境：備注只存在電腦 localStorage、手機看不到時，按此鍵強制同步
+  const pushAllData = useCallback(async () => {
+    if (!url) return;
+    setLoading(true);
+    setSyncErr(null);
+    try {
+      for (const wk of data.g1) {
+        await apiPush(url, { type: 'goal1', ...wk });
+      }
+      for (const wk of data.g2) {
+        await apiPush(url, { type: 'goal2', ...wk });
+      }
+      // 推送完後同步驗證
+      await sync();
+    } catch { setSyncErr('上傳失敗，請檢查網路'); }
+    finally { setLoading(false); }
+  }, [url, data, sync]);
+
   const upG1 = useCallback((week: number, p: Partial<G1Week>) => {
     // 使用 functional setData 避免 stale closure 問題（快速輸入備注時不丟字）
     setData(prev => {
@@ -908,9 +927,15 @@ export default function App() {
           </div>
           <div className="flex gap-1.5">
             {url && (
-              <button onClick={sync} className="p-2.5 hover:bg-slate-100 rounded-xl transition-colors">
-                <RefreshCw size={15} className={loading ? 'animate-spin text-indigo-500' : 'text-slate-400'} />
-              </button>
+              <>
+                <button onClick={pushAllData} title="將本機備注全部推送到 Sheets（手機看不到備注時按此）"
+                  className="p-2.5 hover:bg-amber-50 rounded-xl transition-colors group relative">
+                  <Upload size={15} className={loading ? 'text-amber-400' : 'text-amber-400 group-hover:text-amber-500'} />
+                </button>
+                <button onClick={sync} className="p-2.5 hover:bg-slate-100 rounded-xl transition-colors">
+                  <RefreshCw size={15} className={loading ? 'animate-spin text-indigo-500' : 'text-slate-400'} />
+                </button>
+              </>
             )}
             <button onClick={() => setShowSetup(true)} className="p-2.5 hover:bg-slate-100 rounded-xl transition-colors">
               <Settings size={15} className="text-slate-400" />
