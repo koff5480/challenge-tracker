@@ -796,7 +796,27 @@ export default function App() {
     setLoading(true);
     try {
       const remote = await apiGet(url);
-      setData(remote); saveData(remote); setLastSync(new Date()); setSyncErr(null);
+      setData(prev => {
+        // 合併遠端資料：保護本地備注不被遠端空值覆蓋
+        const merged: AppData = {
+          ...remote,
+          g1: remote.g1.length > 0
+            ? remote.g1.map(rw => {
+                const lw = prev.g1.find(w => w.week === rw.week);
+                return { ...rw, notes: rw.notes || lw?.notes || '' };
+              })
+            : prev.g1,
+          g2: remote.g2.length > 0
+            ? remote.g2.map(rw => {
+                const lw = prev.g2.find(w => w.week === rw.week);
+                return { ...rw, notes: rw.notes || lw?.notes || '' };
+              })
+            : prev.g2,
+        };
+        saveData(merged);
+        return merged;
+      });
+      setLastSync(new Date()); setSyncErr(null);
     } catch { setSyncErr('同步失敗，請確認 Apps Script URL'); }
     finally { setLoading(false); }
   }, [url]);
@@ -806,42 +826,60 @@ export default function App() {
   }, [sync]);
 
   const upG1 = useCallback((week: number, p: Partial<G1Week>) => {
-    const updated = data.g1.map(w => w.week === week ? { ...w, ...p } : w);
-    // 豁免週往後遞延：每有一週豁免，總週數 +1
-    const exemptCount = updated.filter(w => w.isExempt).length;
-    const neededWeeks = 10 + exemptCount;
-    let g1 = updated;
-    while (g1.length < neededWeeks) {
-      const n = g1.length + 1;
-      g1 = [...g1, { week: n, startDate: dateOffset(G1_START, n - 1), sweets: 0, junk: 0, isExempt: false, notes: '' }];
-    }
-    const d = { ...data, g1 };
-    setData(d); saveData(d);
-    if (url) apiPush(url, { type: 'goal1', ...d.g1.find(w => w.week === week)! });
-  }, [data, url]);
+    // 使用 functional setData 避免 stale closure 問題（快速輸入備注時不丟字）
+    setData(prev => {
+      const updated = prev.g1.map(w => w.week === week ? { ...w, ...p } : w);
+      // 豁免週往後遞延：每有一週豁免，總週數 +1
+      const exemptCount = updated.filter(w => w.isExempt).length;
+      const neededWeeks = 10 + exemptCount;
+      let g1 = updated;
+      while (g1.length < neededWeeks) {
+        const n = g1.length + 1;
+        g1 = [...g1, { week: n, startDate: dateOffset(G1_START, n - 1), sweets: 0, junk: 0, isExempt: false, notes: '' }];
+      }
+      const d = { ...prev, g1 };
+      saveData(d);
+      if (url) {
+        const wk = d.g1.find(w => w.week === week);
+        if (wk) apiPush(url, { type: 'goal1', ...wk });
+      }
+      return d;
+    });
+  }, [url]);
 
   const upG2 = useCallback((week: number, p: Partial<G2Week>) => {
-    const updated = data.g2.map(w => w.week === week ? { ...w, ...p } : w);
-    // 容錯週往後遞延：以截止日算出基礎週數，再加上容錯次數
-    const baseWeeks = Math.ceil((new Date(data.g2End).getTime() - new Date(G2_START).getTime()) / MSW) + 1;
-    const graceCount = updated.filter(w => w.isGrace).length;
-    const neededWeeks = baseWeeks + graceCount;
-    let g2 = updated;
-    while (g2.length < neededWeeks) {
-      const n = g2.length + 1;
-      g2 = [...g2, { week: n, startDate: dateOffset(G2_START, n - 1), outdoor: 0, home: 0, isGrace: false, notes: '' }];
-    }
-    const d = { ...data, g2 };
-    setData(d); saveData(d);
-    if (url) apiPush(url, { type: 'goal2', ...d.g2.find(w => w.week === week)! });
-  }, [data, url]);
+    // 使用 functional setData 避免 stale closure 問題（快速輸入備注時不丟字）
+    setData(prev => {
+      const updated = prev.g2.map(w => w.week === week ? { ...w, ...p } : w);
+      // 容錯週往後遞延：以截止日算出基礎週數，再加上容錯次數
+      const baseWeeks = Math.ceil((new Date(prev.g2End).getTime() - new Date(G2_START).getTime()) / MSW) + 1;
+      const graceCount = updated.filter(w => w.isGrace).length;
+      const neededWeeks = baseWeeks + graceCount;
+      let g2 = updated;
+      while (g2.length < neededWeeks) {
+        const n = g2.length + 1;
+        g2 = [...g2, { week: n, startDate: dateOffset(G2_START, n - 1), outdoor: 0, home: 0, isGrace: false, notes: '' }];
+      }
+      const d = { ...prev, g2 };
+      saveData(d);
+      if (url) {
+        const wk = d.g2.find(w => w.week === week);
+        if (wk) apiPush(url, { type: 'goal2', ...wk });
+      }
+      return d;
+    });
+  }, [url]);
 
   const applyEndDate = (newEnd: string) => {
-    const n = Math.ceil((new Date(newEnd).getTime() - new Date(G2_START).getTime()) / MSW) + 1;
-    const map = Object.fromEntries(data.g2.map(w => [w.week, w]));
-    const g2 = Array.from({ length: n }, (_, i) => map[i+1] || { week: i+1, startDate: dateOffset(G2_START, i), outdoor: 0, home: 0, isGrace: false, notes: '' });
-    const d = { ...data, g2, g2End: newEnd };
-    setData(d); saveData(d); setShowEndEdit(false);
+    setData(prev => {
+      const n = Math.ceil((new Date(newEnd).getTime() - new Date(G2_START).getTime()) / MSW) + 1;
+      const map = Object.fromEntries(prev.g2.map(w => [w.week, w]));
+      const g2 = Array.from({ length: n }, (_, i) => map[i+1] || { week: i+1, startDate: dateOffset(G2_START, i), outdoor: 0, home: 0, isGrace: false, notes: '' });
+      const d = { ...prev, g2, g2End: newEnd };
+      saveData(d);
+      return d;
+    });
+    setShowEndEdit(false);
     if (url) apiPush(url, { type: 'config', key: 'goal2EndDate', value: newEnd });
   };
 
